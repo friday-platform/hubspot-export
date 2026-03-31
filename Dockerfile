@@ -3,8 +3,8 @@ FROM denoland/deno:2.7.4
 WORKDIR /app
 
 # Cache dependencies by copying config first
-COPY deno.json .
-RUN deno install
+COPY deno.json deno.lock .
+RUN deno install --frozen
 
 # Copy source code
 COPY src/ src/

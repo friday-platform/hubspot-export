@@ -54,9 +54,7 @@ export async function hubspotFetch<T>(
       const res = await fetch(url.toString(), init);
       if (!res.ok) {
         const text = await res.text();
-        const err = new HubSpotApiError(res.status, path, text);
-        if (!err.retryable) throw new TypeError(err.message);
-        throw err;
+        throw new HubSpotApiError(res.status, path, text);
       }
       return res.json() as Promise<T>;
     },
