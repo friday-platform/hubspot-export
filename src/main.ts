@@ -9,6 +9,15 @@ import { fetchConversationsForTicket } from "./conversations.ts";
 import { DumpWriter } from "./export.ts";
 import type { Message, TicketDump } from "./export.ts";
 import { parallelStream } from "./hubspot.ts";
+import {
+  loadCheckpoint,
+  saveCheckpoint,
+  clearCheckpoint,
+  loadTicketIds,
+  saveTicketIds,
+  loadProperties,
+  saveProperties,
+} from "./checkpoint.ts";
 
 const OUTPUT_DIR = Deno.env.get("OUTPUT_DIR") || "./output";
 const CONCURRENCY = (() => {
@@ -29,29 +38,74 @@ const CHUNK_SIZE = (() => {
 async function main() {
   console.log("=== HubSpot Ticket + Conversation Dump ===\n");
 
-  // 1. Discover properties and fetch all ticket IDs (cheap — just strings)
-  const properties = await fetchTicketProperties();
+  await Deno.mkdir(OUTPUT_DIR, { recursive: true });
+
+  // --- Check for existing checkpoint ---
+  const checkpoint = await loadCheckpoint(OUTPUT_DIR);
+  let resuming = false;
+  let startChunk = 0;
+  let processed = 0;
+  let totalEmails = 0;
+  let totalConversations = 0;
+  let errors = 0;
+
+  if (checkpoint) {
+    resuming = true;
+    startChunk = checkpoint.nextChunk;
+    processed = checkpoint.stats.processed;
+    totalEmails = checkpoint.stats.totalEmails;
+    totalConversations = checkpoint.stats.totalConversations;
+    errors = checkpoint.stats.errors;
+    console.log(
+      `Resuming from checkpoint: chunk ${startChunk} ` +
+      `(${processed} tickets already processed, ` +
+      `${totalEmails} emails, ${totalConversations} convos)\n`,
+    );
+  }
+
+  // --- Load or fetch ticket properties ---
+  let properties = resuming ? await loadProperties(OUTPUT_DIR) : null;
+  if (!properties) {
+    properties = await fetchTicketProperties();
+    await saveProperties(OUTPUT_DIR, properties);
+  } else {
+    console.log(`Loaded ${properties.length} ticket properties from cache.`);
+  }
   const propertyNames = properties.map((p) => p.name);
-  const allTicketIds = await fetchAllTicketIds();
+
+  // --- Load or fetch ticket IDs ---
+  let allTicketIds = resuming ? await loadTicketIds(OUTPUT_DIR) : null;
+  if (!allTicketIds) {
+    allTicketIds = await fetchAllTicketIds();
+    await saveTicketIds(OUTPUT_DIR, allTicketIds);
+  } else {
+    console.log(`Loaded ${allTicketIds.length} ticket IDs from cache.`);
+  }
+
   if (allTicketIds.length === 0) {
     console.log("No tickets found. Check your access token and scopes.");
     return;
   }
 
-  // 2. Process in chunks to bound memory usage
-  const writer = await DumpWriter.create(OUTPUT_DIR, properties);
-  let processed = 0;
-  let totalEmails = 0;
-  let totalConversations = 0;
-  let errors = 0;
+  // --- Open writer (append mode if resuming) ---
+  const writer = await DumpWriter.create(
+    OUTPUT_DIR,
+    properties,
+    resuming ? checkpoint!.filePositions : undefined,
+  );
+
   const startTime = Date.now();
   const totalChunks = Math.ceil(allTicketIds.length / CHUNK_SIZE);
 
   console.log(
-    `\nProcessing ${allTicketIds.length} tickets in ${totalChunks} chunks of ${CHUNK_SIZE} (concurrency: ${CONCURRENCY})...\n`,
+    `\nProcessing ${allTicketIds.length} tickets in ${totalChunks} chunks of ${CHUNK_SIZE} (concurrency: ${CONCURRENCY})...`,
   );
+  if (resuming) {
+    console.log(`Skipping chunks 1-${startChunk} (already complete).`);
+  }
+  console.log();
 
-  for (let chunkIdx = 0; chunkIdx < totalChunks; chunkIdx++) {
+  for (let chunkIdx = startChunk; chunkIdx < totalChunks; chunkIdx++) {
     const chunkIds = allTicketIds.slice(
       chunkIdx * CHUNK_SIZE,
       (chunkIdx + 1) * CHUNK_SIZE,
@@ -98,15 +152,16 @@ async function main() {
         processed++;
         if (processed % 200 === 0 || processed === allTicketIds.length) {
           const elapsed = (Date.now() - startTime) / 1000;
-          const rate = processed / elapsed;
-          const remaining = rate > 0 ? Math.ceil((allTicketIds.length - processed) / rate) : 0;
+          const remaining = processed > 0
+            ? Math.ceil(((allTicketIds.length - processed) / (processed / elapsed)))
+            : 0;
           const eta = remaining > 60
             ? `${Math.floor(remaining / 60)}m ${remaining % 60}s`
             : `${remaining}s`;
           console.log(
             `Progress: ${processed}/${allTicketIds.length} (${((processed / allTicketIds.length) * 100).toFixed(1)}%) | ` +
             `${totalEmails} emails, ${totalConversations} convos | ` +
-            `${rate.toFixed(1)} tickets/s | ETA: ${processed < allTicketIds.length ? eta : "done"}`,
+            `ETA: ${processed < allTicketIds.length ? eta : "done"}`,
           );
         }
 
@@ -116,14 +171,27 @@ async function main() {
         await writer.writeTicket(dump);
       },
     );
+
+    // --- Save checkpoint after each chunk ---
+    const filePositions = await writer.getFilePositions();
+    await saveCheckpoint(OUTPUT_DIR, {
+      nextChunk: chunkIdx + 1,
+      filePositions,
+      stats: { processed, totalEmails, totalConversations, errors },
+    });
+    console.log(`  [Checkpoint saved: ${processed} tickets complete]\n`);
+
     // chunk data (tickets, emailAssociations, emailCache) falls out of scope here → GC reclaims
   }
 
   await writer.close();
   const stats = writer.stats;
 
+  // All done — clear checkpoint (keep cache files for potential future runs)
+  await clearCheckpoint(OUTPUT_DIR);
+
   console.log("\n=== Dump Complete ===");
-  console.log(`Tickets:      ${stats.tickets}`);
+  console.log(`Tickets:      ${processed}`);
   console.log(`Messages:     ${stats.messages}`);
   console.log(`  Emails:     ${totalEmails}`);
   console.log(`  Conversations: ${totalConversations}`);
