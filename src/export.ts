@@ -44,7 +44,6 @@ export class DumpWriter {
   private messageCount = 0;
   private properties: TicketProperty[];
   private portalId: string;
-  private writeLock: Promise<void> = Promise.resolve();
 
   private constructor(
     ticketsFile: Deno.FsFile,
@@ -105,50 +104,40 @@ export class DumpWriter {
   }
 
   async writeTicket(dump: TicketDump): Promise<void> {
-    // Serialize writes so parallel workers don't interleave output
-    const prev = this.writeLock;
-    let release!: () => void;
-    this.writeLock = new Promise<void>((r) => { release = r; });
-    await prev;
+    const { ticket, messages } = dump;
+    const url = `https://app.hubspot.com/contacts/${this.portalId}/ticket/${ticket.id}`;
 
-    try {
-      const { ticket, messages } = dump;
-      const url = `https://app.hubspot.com/contacts/${this.portalId}/ticket/${ticket.id}`;
+    // Build ticket CSV row from properties in order + extras
+    const values = this.properties.map((p) => ticket.properties[p.name] ?? "");
+    values.push(String(messages.length), url);
 
-      // Build ticket CSV row from properties in order + extras
-      const values = this.properties.map((p) => ticket.properties[p.name] ?? "");
-      values.push(String(messages.length), url);
+    await this.writeLine(this.ticketsFile, values.map(csvEscape).join(","));
+    this.ticketCount++;
 
-      await this.writeLine(this.ticketsFile, values.map(csvEscape).join(","));
-      this.ticketCount++;
+    // Write message CSV rows
+    for (const msg of messages) {
+      const threadId = "threadId" in msg ? msg.threadId : "";
+      const msgRow = [
+        ticket.id,
+        msg.id,
+        msg.timestamp,
+        msg.direction,
+        msg.sender,
+        msg.recipient,
+        msg.subject,
+        msg.body,
+        msg.sourceType,
+        threadId,
+      ]
+        .map(csvEscape)
+        .join(",");
 
-      // Write message CSV rows
-      for (const msg of messages) {
-        const threadId = "threadId" in msg ? msg.threadId : "";
-        const msgRow = [
-          ticket.id,
-          msg.id,
-          msg.timestamp,
-          msg.direction,
-          msg.sender,
-          msg.recipient,
-          msg.subject,
-          msg.body,
-          msg.sourceType,
-          threadId,
-        ]
-          .map(csvEscape)
-          .join(",");
-
-        await this.writeLine(this.messagesFile, msgRow);
-        this.messageCount++;
-      }
-
-      // Write JSONL
-      await this.writeLine(this.jsonlFile, JSON.stringify(dump));
-    } finally {
-      release();
+      await this.writeLine(this.messagesFile, msgRow);
+      this.messageCount++;
     }
+
+    // Write JSONL
+    await this.writeLine(this.jsonlFile, JSON.stringify(dump));
   }
 
   async close(): Promise<void> {

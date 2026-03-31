@@ -49,42 +49,36 @@ async function main() {
   console.log(
     `\nFetching conversation threads (concurrency: ${CONCURRENCY})...`,
   );
-  const writer = await DumpWriter.create(OUTPUT_DIR, properties);
   let processed = 0;
   let totalEmails = 0;
   let totalConversations = 0;
   let errors = 0;
   const startTime = Date.now();
 
-  await parallelMap(tickets, CONCURRENCY, async (ticket) => {
+  // Fetch in parallel — results array preserves original ticket order
+  const dumps = await parallelMap(tickets, CONCURRENCY, async (ticket) => {
+    const messages: Message[] = [];
+
+    // Get emails from pre-fetched cache
+    const emails = getEmailsForTicket(ticket.id, emailAssociations, emailCache);
+    messages.push(...emails);
+    totalEmails += emails.length;
+
+    // Fetch conversation threads (per-ticket API call)
     try {
-      const messages: Message[] = [];
-
-      // Get emails from pre-fetched cache
-      const emails = getEmailsForTicket(ticket.id, emailAssociations, emailCache);
-      messages.push(...emails);
-      totalEmails += emails.length;
-
-      // Fetch conversation threads (per-ticket API call)
-      try {
-        const convos = await fetchConversationsForTicket(ticket.id);
-        messages.push(...convos);
-        totalConversations += convos.length;
-      } catch (err) {
-        console.warn(`  Warning: conversations for ticket ${ticket.id}: ${err}`);
-      }
-
-      // Sort all messages chronologically
-      messages.sort(
-        (a, b) =>
-          new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
-      );
-
-      await writer.writeTicket({ ticket, messages });
+      const convos = await fetchConversationsForTicket(ticket.id);
+      messages.push(...convos);
+      totalConversations += convos.length;
     } catch (err) {
+      console.warn(`  Warning: conversations for ticket ${ticket.id}: ${err}`);
       errors++;
-      console.error(`  Error processing ticket ${ticket.id}: ${err}`);
     }
+
+    // Sort all messages chronologically
+    messages.sort(
+      (a, b) =>
+        new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+    );
 
     processed++;
     if (processed % 200 === 0 || processed === tickets.length) {
@@ -100,8 +94,16 @@ async function main() {
         `${rate.toFixed(1)} tickets/s | ETA: ${processed < tickets.length ? eta : "done"}`,
       );
     }
+
+    return { ticket, messages };
   });
 
+  // Write in original ticket order (sequential — no interleaving possible)
+  console.log("\nWriting output files...");
+  const writer = await DumpWriter.create(OUTPUT_DIR, properties);
+  for (const dump of dumps) {
+    await writer.writeTicket(dump);
+  }
   await writer.close();
   const stats = writer.stats;
 
