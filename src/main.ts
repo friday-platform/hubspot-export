@@ -11,7 +11,13 @@ import type { Message } from "./export.ts";
 import { parallelMap } from "./hubspot.ts";
 
 const OUTPUT_DIR = Deno.env.get("OUTPUT_DIR") || "./output";
-const CONCURRENCY = parseInt(Deno.env.get("CONCURRENCY") || "10");
+const CONCURRENCY = (() => {
+  const val = parseInt(Deno.env.get("CONCURRENCY") || "10");
+  if (isNaN(val) || val < 1) {
+    throw new Error(`Invalid CONCURRENCY value: "${Deno.env.get("CONCURRENCY")}". Must be a positive integer.`);
+  }
+  return val;
+})();
 
 async function main() {
   console.log("=== HubSpot Ticket + Conversation Dump ===\n");
