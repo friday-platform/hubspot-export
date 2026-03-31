@@ -2,6 +2,13 @@
 set -euo pipefail
 
 IMAGE="tempestdx/hubspot-export"
+
+# Ensure clean working tree
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "ERROR: Uncommitted changes. Commit or stash before building."
+  exit 1
+fi
+
 GIT_HASH=$(git rev-parse --short HEAD)
 
 # Get the latest version from git tags, default to 0.0.0 if none
@@ -33,14 +40,15 @@ docker build \
   .
 
 # Push all tags
-echo "Pushing tags..."
+echo "Pushing docker tags..."
 docker push "${IMAGE}:${NEW_VERSION}"
 docker push "${IMAGE}:${GIT_HASH}"
 docker push "${IMAGE}:latest"
 
-# Tag in git
+# Tag in git and push
 git tag "v${NEW_VERSION}"
-echo "Created git tag: v${NEW_VERSION}"
+git push origin "v${NEW_VERSION}"
+echo "Created and pushed git tag: v${NEW_VERSION}"
 
 echo ""
 echo "=== Done ==="

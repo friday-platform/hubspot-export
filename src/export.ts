@@ -35,13 +35,6 @@ function csvEscape(value: string): string {
   return value;
 }
 
-const HUBSPOT_PORTAL = Deno.env.get("HUBSPOT_PORTAL_ID");
-if (!HUBSPOT_PORTAL) {
-  throw new Error(
-    "HUBSPOT_PORTAL_ID is not set. Add it to your .env file. Find it in your HubSpot URL: app.hubspot.com/contacts/{portal_id}/...",
-  );
-}
-
 export class DumpWriter {
   private ticketsFile: Deno.FsFile;
   private messagesFile: Deno.FsFile;
@@ -50,23 +43,33 @@ export class DumpWriter {
   private ticketCount = 0;
   private messageCount = 0;
   private properties: TicketProperty[];
+  private portalId: string;
 
   private constructor(
     ticketsFile: Deno.FsFile,
     messagesFile: Deno.FsFile,
     jsonlFile: Deno.FsFile,
     properties: TicketProperty[],
+    portalId: string,
   ) {
     this.ticketsFile = ticketsFile;
     this.messagesFile = messagesFile;
     this.jsonlFile = jsonlFile;
     this.properties = properties;
+    this.portalId = portalId;
   }
 
   static async create(
     outputDir: string,
     properties: TicketProperty[],
   ): Promise<DumpWriter> {
+    const portalId = Deno.env.get("HUBSPOT_PORTAL_ID");
+    if (!portalId) {
+      throw new Error(
+        "HUBSPOT_PORTAL_ID is not set. Add it to your .env file. Find it in your HubSpot URL: app.hubspot.com/contacts/{portal_id}/...",
+      );
+    }
+
     await Deno.mkdir(outputDir, { recursive: true });
 
     const ticketsFile = await Deno.open(`${outputDir}/tickets.csv`, {
@@ -85,7 +88,7 @@ export class DumpWriter {
       truncate: true,
     });
 
-    const writer = new DumpWriter(ticketsFile, messagesFile, jsonlFile, properties);
+    const writer = new DumpWriter(ticketsFile, messagesFile, jsonlFile, properties, portalId);
 
     // Build ticket CSV header from property labels + extras
     const headers = properties.map((p) => p.label);
@@ -102,7 +105,7 @@ export class DumpWriter {
 
   async writeTicket(dump: TicketDump): Promise<void> {
     const { ticket, messages } = dump;
-    const url = `https://app.hubspot.com/contacts/${HUBSPOT_PORTAL}/ticket/${ticket.id}`;
+    const url = `https://app.hubspot.com/contacts/${this.portalId}/ticket/${ticket.id}`;
 
     // Build ticket CSV row from properties in order + extras
     const values = this.properties.map((p) => ticket.properties[p.name] ?? "");

@@ -1,4 +1,5 @@
 import { Client } from "@hubspot/api-client";
+import { retry } from "@std/async/retry";
 
 let _client: Client | undefined;
 
@@ -14,7 +15,17 @@ export function getClient(): Client {
   return _client;
 }
 
-/** Direct HTTP call to HubSpot APIs not covered by the SDK. */
+class HubSpotApiError extends Error {
+  constructor(public status: number, path: string, body: string) {
+    super(`HubSpot API ${status} ${path}: ${body}`);
+  }
+
+  get retryable(): boolean {
+    return this.status === 429 || this.status >= 500;
+  }
+}
+
+/** Direct HTTP call to HubSpot APIs not covered by the SDK, with exponential backoff retry. */
 export async function hubspotFetch<T>(
   path: string,
   params?: Record<string, string>,
@@ -38,17 +49,26 @@ export async function hubspotFetch<T>(
   };
   if (body) init.body = JSON.stringify(body);
 
-  const res = await fetch(url.toString(), init);
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`HubSpot API ${res.status} ${path}: ${text}`);
-  }
-  return res.json() as Promise<T>;
-}
-
-/** Sleep helper for rate-limit pacing. */
-export function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
+  return retry(
+    async () => {
+      const res = await fetch(url.toString(), init);
+      if (!res.ok) {
+        const text = await res.text();
+        const err = new HubSpotApiError(res.status, path, text);
+        if (!err.retryable) throw new TypeError(err.message); // non-retryable, stop immediately
+        throw err; // retryable, let @std/async/retry handle backoff
+      }
+      return res.json() as Promise<T>;
+    },
+    {
+      maxAttempts: 5,
+      minTimeout: 1000,
+      maxTimeout: 30000,
+      multiplier: 2,
+      jitter: 1,
+      isRetriable: (err) => err instanceof HubSpotApiError && err.retryable,
+    },
+  );
 }
 
 /** Run async functions with limited concurrency. */
@@ -67,7 +87,10 @@ export async function parallelMap<T, R>(
     }
   }
 
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, () => worker());
+  const workers = Array.from(
+    { length: Math.min(concurrency, items.length) },
+    () => worker(),
+  );
   await Promise.all(workers);
   return results;
 }
