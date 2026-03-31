@@ -4,17 +4,8 @@ set -euo pipefail
 IMAGE="tempestdx/hubspot-export"
 GIT_HASH=$(git rev-parse --short HEAD)
 
-# Get the latest version tag from Docker Hub, default to 0.0.0 if none exists
-LATEST_VERSION=$(
-  docker manifest inspect "${IMAGE}:latest" > /dev/null 2>&1 \
-    && docker inspect --format='{{index .Config.Labels "version"}}' "${IMAGE}:latest" 2>/dev/null \
-    || echo ""
-)
-
-# Fallback: check git tags for version
-if [[ -z "$LATEST_VERSION" ]]; then
-  LATEST_VERSION=$(git tag --sort=-v:refname | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' | head -1 | sed 's/^v//')
-fi
+# Get the latest version from git tags, default to 0.0.0 if none
+LATEST_VERSION=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1 | sed 's/^v//' || true)
 
 if [[ -z "$LATEST_VERSION" ]]; then
   LATEST_VERSION="0.0.0"
