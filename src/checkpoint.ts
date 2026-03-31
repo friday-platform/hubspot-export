@@ -3,6 +3,8 @@ import type { TicketProperty } from "./tickets.ts";
 export interface CheckpointData {
   /** Next chunk index to process (0-based). All chunks before this are complete. */
   nextChunk: number;
+  /** Year filter used for this run (undefined = all tickets). */
+  year?: number;
   /** Byte positions of output files at the end of the last completed chunk. */
   filePositions: {
     ticketsCsv: number;
@@ -51,13 +53,20 @@ export async function clearCheckpoint(outputDir: string): Promise<void> {
   }
 }
 
-/** Cache ticket IDs to disk so we never re-fetch 388k IDs on resume. */
+function ticketIdsCachePath(outputDir: string, year?: number): string {
+  return year
+    ? `${outputDir}/ticket_ids_${year}.json`
+    : `${outputDir}/ticket_ids.json`;
+}
+
+/** Cache ticket IDs to disk so we never re-fetch on resume. */
 export async function saveTicketIds(
   outputDir: string,
   ids: string[],
+  year?: number,
 ): Promise<void> {
   await Deno.writeTextFile(
-    `${outputDir}/ticket_ids.json`,
+    ticketIdsCachePath(outputDir, year),
     JSON.stringify(ids),
   );
 }
@@ -65,9 +74,10 @@ export async function saveTicketIds(
 /** Load cached ticket IDs, or return null if not cached. */
 export async function loadTicketIds(
   outputDir: string,
+  year?: number,
 ): Promise<string[] | null> {
   try {
-    const text = await Deno.readTextFile(`${outputDir}/ticket_ids.json`);
+    const text = await Deno.readTextFile(ticketIdsCachePath(outputDir, year));
     return JSON.parse(text) as string[];
   } catch (err) {
     if (err instanceof Deno.errors.NotFound) return null;

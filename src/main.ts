@@ -1,5 +1,5 @@
 import "@std/dotenv/load";
-import { fetchTicketProperties, fetchAllTicketIds, fetchTicketsBatch } from "./tickets.ts";
+import { fetchTicketProperties, fetchAllTicketIds, fetchTicketIdsByYear, fetchTicketsBatch } from "./tickets.ts";
 import {
   batchGetEmailAssociations,
   batchFetchEmails,
@@ -34,6 +34,15 @@ const CHUNK_SIZE = (() => {
   }
   return val;
 })();
+const YEAR: number | undefined = (() => {
+  const val = Deno.env.get("YEAR");
+  if (!val) return undefined;
+  const year = parseInt(val);
+  if (isNaN(year) || year < 2000 || year > 2100) {
+    throw new Error(`Invalid YEAR value: "${val}". Must be a 4-digit year (e.g. 2024).`);
+  }
+  return year;
+})();
 
 async function main() {
   console.log("=== HubSpot Ticket + Conversation Dump ===\n");
@@ -50,17 +59,29 @@ async function main() {
   let errors = 0;
 
   if (checkpoint) {
-    resuming = true;
-    startChunk = checkpoint.nextChunk;
-    processed = checkpoint.stats.processed;
-    totalEmails = checkpoint.stats.totalEmails;
-    totalConversations = checkpoint.stats.totalConversations;
-    errors = checkpoint.stats.errors;
-    console.log(
-      `Resuming from checkpoint: chunk ${startChunk} ` +
-      `(${processed} tickets already processed, ` +
-      `${totalEmails} emails, ${totalConversations} convos)\n`,
-    );
+    if (checkpoint.year !== YEAR) {
+      console.log(
+        `Checkpoint was for year=${checkpoint.year ?? "all"} but current YEAR=${YEAR ?? "all"}. ` +
+        `Ignoring checkpoint and starting fresh.\n`,
+      );
+      await clearCheckpoint(OUTPUT_DIR);
+    } else {
+      resuming = true;
+      startChunk = checkpoint.nextChunk;
+      processed = checkpoint.stats.processed;
+      totalEmails = checkpoint.stats.totalEmails;
+      totalConversations = checkpoint.stats.totalConversations;
+      errors = checkpoint.stats.errors;
+      console.log(
+        `Resuming from checkpoint: chunk ${startChunk} ` +
+        `(${processed} tickets already processed, ` +
+        `${totalEmails} emails, ${totalConversations} convos)\n`,
+      );
+    }
+  }
+
+  if (YEAR) {
+    console.log(`Filtering tickets to year: ${YEAR}\n`);
   }
 
   // --- Load or fetch ticket properties ---
@@ -74,10 +95,12 @@ async function main() {
   const propertyNames = properties.map((p) => p.name);
 
   // --- Load or fetch ticket IDs ---
-  let allTicketIds = resuming ? await loadTicketIds(OUTPUT_DIR) : null;
+  let allTicketIds = resuming ? await loadTicketIds(OUTPUT_DIR, YEAR) : null;
   if (!allTicketIds) {
-    allTicketIds = await fetchAllTicketIds();
-    await saveTicketIds(OUTPUT_DIR, allTicketIds);
+    allTicketIds = YEAR
+      ? await fetchTicketIdsByYear(YEAR)
+      : await fetchAllTicketIds();
+    await saveTicketIds(OUTPUT_DIR, allTicketIds, YEAR);
   } else {
     console.log(`Loaded ${allTicketIds.length} ticket IDs from cache.`);
   }
@@ -176,6 +199,7 @@ async function main() {
     const filePositions = await writer.getFilePositions();
     await saveCheckpoint(OUTPUT_DIR, {
       nextChunk: chunkIdx + 1,
+      year: YEAR,
       filePositions,
       stats: { processed, totalEmails, totalConversations, errors },
     });
