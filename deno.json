@@ -1,0 +1,13 @@
+{
+  "tasks": {
+    "start": "deno run -A src/main.ts"
+  },
+  "imports": {
+    "@hubspot/api-client": "npm:@hubspot/api-client@^13.5.0",
+    "@std/dotenv": "jsr:@std/dotenv@^0.225.3",
+    "html-to-text": "npm:html-to-text@^9.0.5"
+  },
+  "compilerOptions": {
+    "strict": true
+  }
+}
