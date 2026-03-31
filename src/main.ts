@@ -7,8 +7,8 @@ import {
 } from "./emails.ts";
 import { fetchConversationsForTicket } from "./conversations.ts";
 import { DumpWriter } from "./export.ts";
-import type { Message } from "./export.ts";
-import { parallelMap } from "./hubspot.ts";
+import type { Message, TicketDump } from "./export.ts";
+import { parallelStream } from "./hubspot.ts";
 
 const OUTPUT_DIR = Deno.env.get("OUTPUT_DIR") || "./output";
 const CONCURRENCY = (() => {
@@ -32,7 +32,7 @@ async function main() {
 
   const allTicketIds = tickets.map((t) => t.id);
 
-  // 2. Batch fetch email associations (1000 per request — ~47 calls for 47K tickets)
+  // 2. Batch fetch email associations (1000 per request)
   console.log("\nFetching email associations in bulk...");
   const emailAssociations = await batchGetEmailAssociations(allTicketIds);
   const allEmailIds = [...new Set([...emailAssociations.values()].flat())];
@@ -45,65 +45,65 @@ async function main() {
   const emailCache = await batchFetchEmails(allEmailIds);
   console.log(`Fetched ${emailCache.size} emails.`);
 
-  // 4. Fetch conversation threads per ticket (parallel with concurrency limit)
+  // 4. Fetch conversations in parallel, write to disk in order as results stream in
   console.log(
-    `\nFetching conversation threads (concurrency: ${CONCURRENCY})...`,
+    `\nFetching conversations & writing output (concurrency: ${CONCURRENCY})...`,
   );
+  const writer = await DumpWriter.create(OUTPUT_DIR, properties);
   let processed = 0;
   let totalEmails = 0;
   let totalConversations = 0;
   let errors = 0;
   const startTime = Date.now();
 
-  // Fetch in parallel — results array preserves original ticket order
-  const dumps = await parallelMap(tickets, CONCURRENCY, async (ticket) => {
-    const messages: Message[] = [];
+  await parallelStream<typeof tickets[0], TicketDump>(
+    tickets,
+    CONCURRENCY,
+    // Fetch phase (parallel)
+    async (ticket) => {
+      const messages: Message[] = [];
 
-    // Get emails from pre-fetched cache
-    const emails = getEmailsForTicket(ticket.id, emailAssociations, emailCache);
-    messages.push(...emails);
-    totalEmails += emails.length;
+      const emails = getEmailsForTicket(ticket.id, emailAssociations, emailCache);
+      messages.push(...emails);
+      totalEmails += emails.length;
 
-    // Fetch conversation threads (per-ticket API call)
-    try {
-      const convos = await fetchConversationsForTicket(ticket.id);
-      messages.push(...convos);
-      totalConversations += convos.length;
-    } catch (err) {
-      console.warn(`  Warning: conversations for ticket ${ticket.id}: ${err}`);
-      errors++;
-    }
+      try {
+        const convos = await fetchConversationsForTicket(ticket.id);
+        messages.push(...convos);
+        totalConversations += convos.length;
+      } catch (err) {
+        console.warn(`  Warning: conversations for ticket ${ticket.id}: ${err}`);
+        errors++;
+      }
 
-    // Sort all messages chronologically
-    messages.sort(
-      (a, b) =>
-        new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
-    );
-
-    processed++;
-    if (processed % 200 === 0 || processed === tickets.length) {
-      const elapsed = (Date.now() - startTime) / 1000;
-      const rate = processed / elapsed;
-      const remaining = rate > 0 ? Math.ceil((tickets.length - processed) / rate) : 0;
-      const eta = remaining > 60
-        ? `${Math.floor(remaining / 60)}m ${remaining % 60}s`
-        : `${remaining}s`;
-      console.log(
-        `Progress: ${processed}/${tickets.length} (${((processed / tickets.length) * 100).toFixed(1)}%) | ` +
-        `${totalEmails} emails, ${totalConversations} convos | ` +
-        `${rate.toFixed(1)} tickets/s | ETA: ${processed < tickets.length ? eta : "done"}`,
+      messages.sort(
+        (a, b) =>
+          new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
       );
-    }
 
-    return { ticket, messages };
-  });
+      processed++;
+      if (processed % 200 === 0 || processed === tickets.length) {
+        const elapsed = (Date.now() - startTime) / 1000;
+        const rate = processed / elapsed;
+        const remaining = rate > 0 ? Math.ceil((tickets.length - processed) / rate) : 0;
+        const eta = remaining > 60
+          ? `${Math.floor(remaining / 60)}m ${remaining % 60}s`
+          : `${remaining}s`;
+        console.log(
+          `Progress: ${processed}/${tickets.length} (${((processed / tickets.length) * 100).toFixed(1)}%) | ` +
+          `${totalEmails} emails, ${totalConversations} convos | ` +
+          `${rate.toFixed(1)} tickets/s | ETA: ${processed < tickets.length ? eta : "done"}`,
+        );
+      }
 
-  // Write in original ticket order (sequential — no interleaving possible)
-  console.log("\nWriting output files...");
-  const writer = await DumpWriter.create(OUTPUT_DIR, properties);
-  for (const dump of dumps) {
-    await writer.writeTicket(dump);
-  }
+      return { ticket, messages };
+    },
+    // Flush phase (sequential, in original order)
+    async (dump) => {
+      await writer.writeTicket(dump);
+    },
+  );
+
   await writer.close();
   const stats = writer.stats;
 

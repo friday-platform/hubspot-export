@@ -55,8 +55,8 @@ export async function hubspotFetch<T>(
       if (!res.ok) {
         const text = await res.text();
         const err = new HubSpotApiError(res.status, path, text);
-        if (!err.retryable) throw new TypeError(err.message); // non-retryable, stop immediately
-        throw err; // retryable, let @std/async/retry handle backoff
+        if (!err.retryable) throw new TypeError(err.message);
+        throw err;
       }
       return res.json() as Promise<T>;
     },
@@ -71,19 +71,36 @@ export async function hubspotFetch<T>(
   );
 }
 
-/** Run async functions with limited concurrency. */
-export async function parallelMap<T, R>(
+/**
+ * Process items in parallel with limited concurrency, streaming results
+ * to an async callback in original order. Frees each result from memory
+ * as soon as it's flushed, so at most `concurrency` results are buffered.
+ */
+export async function parallelStream<T, R>(
   items: T[],
   concurrency: number,
-  fn: (item: T) => Promise<R>,
-): Promise<R[]> {
-  const results: R[] = new Array(items.length);
-  let index = 0;
+  fn: (item: T, index: number) => Promise<R>,
+  flush: (result: R, index: number) => Promise<void>,
+): Promise<void> {
+  const buffer = new Map<number, R>();
+  let nextToFlush = 0;
+  let fetchIndex = 0;
+
+  async function tryFlush() {
+    while (buffer.has(nextToFlush)) {
+      const result = buffer.get(nextToFlush)!;
+      buffer.delete(nextToFlush);
+      await flush(result, nextToFlush);
+      nextToFlush++;
+    }
+  }
 
   async function worker() {
-    while (index < items.length) {
-      const i = index++;
-      results[i] = await fn(items[i]);
+    while (fetchIndex < items.length) {
+      const i = fetchIndex++;
+      const result = await fn(items[i], i);
+      buffer.set(i, result);
+      await tryFlush();
     }
   }
 
@@ -92,5 +109,4 @@ export async function parallelMap<T, R>(
     () => worker(),
   );
   await Promise.all(workers);
-  return results;
 }
