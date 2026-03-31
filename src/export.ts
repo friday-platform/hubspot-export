@@ -35,7 +35,12 @@ function csvEscape(value: string): string {
   return value;
 }
 
-const HUBSPOT_PORTAL = Deno.env.get("HUBSPOT_PORTAL_ID") || "";
+const HUBSPOT_PORTAL = Deno.env.get("HUBSPOT_PORTAL_ID");
+if (!HUBSPOT_PORTAL) {
+  throw new Error(
+    "HUBSPOT_PORTAL_ID is not set. Add it to your .env file. Find it in your HubSpot URL: app.hubspot.com/contacts/{portal_id}/...",
+  );
+}
 
 export class DumpWriter {
   private ticketsFile: Deno.FsFile;

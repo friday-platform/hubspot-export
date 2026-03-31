@@ -55,11 +55,14 @@ The token looks like: `pat-na2-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`
 
 ### Step 1: Set up your token
 
-Create a file called `.env` with your service key:
+Create a file called `.env` with your service key and portal ID:
 
 ```
 HUBSPOT_ACCESS_TOKEN=pat-na2-your-actual-token-here
+HUBSPOT_PORTAL_ID=12345678
 ```
+
+You can find your portal ID in any HubSpot URL: `app.hubspot.com/contacts/{portal_id}/...`
 
 ### Step 2: Run the export
 
@@ -143,11 +146,11 @@ One JSON object per line, containing the full structured data for each ticket an
 | Ticket Count | Estimated Time |
 |-------------|---------------|
 | 1-100 | Under 1 minute |
-| 1,000 | 5-10 minutes |
-| 10,000 | 30-60 minutes |
-| 100,000+ | 2-4 hours |
+| 1,000 | 2-5 minutes |
+| 10,000 | 15-25 minutes |
+| 50,000 | 1-2 hours |
 
-The tool processes tickets in batches and respects HubSpot's rate limits (100 requests per 10 seconds). Progress is printed to the terminal as it runs.
+The tool uses batch APIs and parallel fetching to maximize throughput while respecting HubSpot's rate limits (100 requests per 10 seconds). Email associations and content are fetched in bulk (up to 1,000 per request), and conversation threads are fetched with 10 concurrent workers. Progress with ETA is printed to the terminal as it runs.
 
 ## Troubleshooting
 
