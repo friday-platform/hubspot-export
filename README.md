@@ -169,32 +169,36 @@ The tool uses batch APIs and parallel fetching to maximize throughput while resp
 
 ## Troubleshooting
 
-### "HUBSPOT_ACCESS_TOKEN is not set"
+### `HUBSPOT_ACCESS_TOKEN is not set`
 
 Make sure you:
 1. Created the `.env` file (copy from `.env.example`)
 2. Added your actual token to the `.env` file
 3. Included `--env-file .env` in the `docker run` command
 
-### "HubSpot API 401" or "Unauthorized"
+### `HUBSPOT_PORTAL_ID is not set`
 
-Your token is invalid or expired. Generate a new one in HubSpot Settings → Integrations → Private Apps.
+Add your portal ID to the `.env` file. Find it in any HubSpot URL: `app.hubspot.com/contacts/{portal_id}/...`
 
-### "HubSpot API 403" or "Forbidden"
+### `HubSpot API 401` / `Unauthorized`
 
-Your token is missing required scopes. Go to your Private App settings and make sure these scopes are enabled:
+Your token is invalid or expired. Generate a new one in HubSpot Settings → Integrations → Service Keys.
+
+### `HubSpot API 403` / `Forbidden`
+
+Your token is missing required scopes. Go to your Service Key settings and make sure these scopes are enabled:
 - `tickets`
 - `conversations.read`
 - `sales-email-read`
 
 If you see 403 errors specifically when fetching emails, you may also need to add the `crm.objects.emails.read` scope.
 
-### "Rate limit exceeded" or "429 Too Many Requests"
+### `Rate limit exceeded` / `429 Too Many Requests`
 
-The tool has built-in rate limiting, but if you see this error it will automatically retry. If it persists, the batch size can be reduced via environment variable:
+The tool has built-in rate limiting, but if you see this error it will automatically retry. If it persists, reduce concurrency:
 
 ```bash
-docker run --env-file .env -e BATCH_SIZE=10 -v "$(pwd)/output:/app/output" tempestdx/hubspot-export
+docker run --env-file .env -e CONCURRENCY=5 -v "$(pwd)/output:/app/output" tempestdx/hubspot-export
 ```
 
 ### The output files are empty
