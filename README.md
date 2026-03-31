@@ -80,17 +80,32 @@ You'll see progress in the terminal:
 ```
 === HubSpot Ticket + Conversation Dump ===
 
+Fetching ticket property definitions...
+Found 206 ticket properties.
 Fetching all tickets...
-Fetched 4 tickets.
+  ...4 tickets fetched (0.2s elapsed)
+Fetched 4 tickets in 0.2s.
 
-Fetching emails and conversation messages for each ticket...
-Progress: 4/4 tickets (100.0%) | 3 emails, 5 conversation msgs
+Fetching email associations in bulk...
+  Associations batch 1/1 (4/4 tickets)...
+Found 3 unique emails across 3 tickets.
+Fetching email content in bulk...
+  Email content batch 1/1 (3/3 emails)...
+Fetched 3 emails.
+
+Fetching conversation threads (concurrency: 10)...
+Progress: 4/4 (100.0%) | 3 emails, 5 convos | 10.4 tickets/s | ETA: done
 
 === Dump Complete ===
 Tickets:      4
 Messages:     8
   Emails:     3
   Conversations: 5
+Errors:       0
+Output dir:   ./output/
+  tickets.csv   - ticket metadata
+  messages.csv  - all conversation messages
+  dump.jsonl    - full structured data
 ```
 
 ## Output Files
